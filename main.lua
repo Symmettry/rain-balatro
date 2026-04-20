@@ -3,6 +3,7 @@ local Scene3D = assert(SMODS.load_file("lib/3d/scene.lua"))()
 RAIN = rawget(_G, "RAIN") or {}
 _G.RAIN = RAIN
 
+RAIN.mod = SMODS.current_mod
 RAIN.rain_active = true
 
 local scene3d = nil

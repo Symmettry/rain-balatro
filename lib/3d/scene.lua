@@ -4,6 +4,7 @@ local Vec3 = Math3D.Vec3
 local Camera = assert(SMODS.load_file("lib/3d/camera.lua"))()
 local Mesh = assert(SMODS.load_file("lib/3d/mesh.lua"))()
 local Renderer = assert(SMODS.load_file("lib/3d/renderer.lua"))()
+local AudioSystem = assert(SMODS.load_file("lib/audio/playback.lua"))()
 
 local Scene3D = {}
 Scene3D.__index = Scene3D
@@ -104,6 +105,13 @@ function Scene3D.new()
     }
     
     self:updateViewport()
+
+    AudioSystem.play("background", {
+        loop = true,
+        mode = "stream",
+        volume = 0.8
+    })
+
     return self
 end
 
