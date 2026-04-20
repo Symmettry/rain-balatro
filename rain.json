@@ -1,0 +1,14 @@
+{
+    "id": "rain",
+    "name": "Rain",
+    "display_name": "Rain",
+    "author": ["lily"],
+    "description": "Adds a nice rain overlay to Balatro... you hope.",
+    "prefix": "rain",
+    "main_file": "main.lua",
+    "priority": 1e1024,
+    "badge_colour": "3333EE",
+    "badge_text_colour": "ffffff",
+    "version": "0.0.1",
+    "dependencies": ["Steamodded (>=1.0.0~BETA-1531zeebee)"]
+}
