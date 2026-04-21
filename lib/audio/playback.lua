@@ -17,7 +17,6 @@ local function readFileData(absPath, displayName)
 
     assert(bytes and #bytes > 0, "Audio file was empty or unreadable: " .. absPath)
 
-    -- displayName just needs a sensible extension for decoder detection
     return love.filesystem.newFileData(bytes, displayName)
 end
 

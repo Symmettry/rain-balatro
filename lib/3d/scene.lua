@@ -332,9 +332,7 @@ function Scene3D:draw()
         local dz = inst.pos.z - self.camera.pos.z
         local distSq = dx*dx + dz*dz
 
-        -- 🔥 LOD SWITCH
         if distSq < 300 then
-            -- CLOSE → full tree
             Renderer.collectMeshTriangles(
                 tris,
                 self.tree.trunk,
@@ -353,7 +351,6 @@ function Scene3D:draw()
                 rh
             )
         else
-            -- FAR → billboard (faces camera)
             local angle = math.atan2(
                 self.camera.pos.x - inst.pos.x,
                 self.camera.pos.z - inst.pos.z
