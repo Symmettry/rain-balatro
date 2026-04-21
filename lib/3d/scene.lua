@@ -23,7 +23,7 @@ function Scene3D.new()
         0,
         math.rad(75),
         16 / 9,
-        0.03,
+        0.005,
         100
     )
 
@@ -51,8 +51,6 @@ function Scene3D.new()
         collideHalfZ = 1.26,
         collidePadding = 0.18,
     }
-    
-    self.platform = Mesh.quad(18, { r = 0.15, g = 0.4, b = 0.15 })
 
     self.tree = {
         trunk = Mesh.treeTrunk(),
@@ -63,13 +61,14 @@ function Scene3D.new()
             Mesh.treeFoliage(6, 0.8, 1.5),
         }
     }
+    self.treeBillboard = Mesh.billboard(1.5, { r=0.1, g=0.45, b=0.12 })
 
     self.treeInstances = {}
 
     math.randomseed(os.time())
 
-    local cols = 10
-    local rows = 10
+    local cols = 20
+    local rows = 20
     local spacingX = 4
     local spacingZ = 4
     local jitterX = 1.0
@@ -192,7 +191,6 @@ function Scene3D:update(dt)
 
         if insideX and insideZ then
             local oldPos = self.camera.pos
-
             local tryX = Vec3.new(nextPos.x, oldPos.y, oldPos.z)
             local tryZ = Vec3.new(oldPos.x, oldPos.y, nextPos.z)
 
@@ -327,31 +325,52 @@ function Scene3D:draw()
 
 
 
-
-
-
-
-
     for i = 1, #self.treeInstances do
         local inst = self.treeInstances[i]
 
-        Renderer.collectMeshTriangles(
-            tris,
-            self.tree.trunk,
-            { pos = inst.pos, rot = inst.rot },
-            self.camera,
-            rw,
-            rh
-        )
+        local dx = inst.pos.x - self.camera.pos.x
+        local dz = inst.pos.z - self.camera.pos.z
+        local distSq = dx*dx + dz*dz
 
-        Renderer.collectMeshListTriangles(
-            tris,
-            self.tree.foliage,
-            { pos = inst.pos, rot = inst.rot },
-            self.camera,
-            rw,
-            rh
-        )
+        -- 🔥 LOD SWITCH
+        if distSq < 300 then
+            -- CLOSE → full tree
+            Renderer.collectMeshTriangles(
+                tris,
+                self.tree.trunk,
+                { pos = inst.pos, rot = inst.rot },
+                self.camera,
+                rw,
+                rh
+            )
+
+            Renderer.collectMeshListTriangles(
+                tris,
+                self.tree.foliage,
+                { pos = inst.pos, rot = inst.rot },
+                self.camera,
+                rw,
+                rh
+            )
+        else
+            -- FAR → billboard (faces camera)
+            local angle = math.atan2(
+                self.camera.pos.x - inst.pos.x,
+                self.camera.pos.z - inst.pos.z
+            )
+
+            Renderer.collectMeshTriangles(
+                tris,
+                self.treeBillboard,
+                {
+                    pos = inst.pos,
+                    rot = Vec3.new(0, angle, 0)
+                },
+                self.camera,
+                rw,
+                rh
+            )
+        end
     end
 
     Renderer.drawTriangleList(tris, rw, rh)
@@ -359,7 +378,7 @@ function Scene3D:draw()
 
     love.graphics.setCanvas()
 
-    self.postFX:send(self, love.timer.getTime())
+    self.postFX:send(love.timer.getTime())
 
     love.graphics.setScissor(vp.x, vp.y, vp.w, vp.h)
     love.graphics.setShader(self.postFX.shader)

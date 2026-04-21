@@ -50,7 +50,7 @@ vec4 effect(vec4 color, Image tex, vec2 uv, vec2 px)
     }, PostFX)
 end
 
-function PostFX:send(w, h, t)
+function PostFX:send(t)
     self.shader:send("time", t or 0)
 end
 

@@ -184,4 +184,16 @@ function Mesh.box(width, height, depth, color)
     return Mesh.new(v, t, color or { r = 0.5, g = 0.5, b = 0.5 })
 end
 
+function Mesh.billboard(size, color)
+    local s = size or 1
+    local v = {
+        Vec3.new(-s, 0, 0),
+        Vec3.new( s, 0, 0),
+        Vec3.new( s, s*2, 0),
+        Vec3.new(-s, s*2, 0),
+    }
+    local t = {{1,2,3}, {1,3,4}}
+    return Mesh.new(v, t, color or {r=0.1, g=0.5, b=0.1})
+end
+
 return Mesh

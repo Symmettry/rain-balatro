@@ -402,10 +402,15 @@ local function appendMeshTriangles(outTris, mesh, model, camera, rw, rh, vertexO
 end
 
 function Renderer.collectMeshTriangles(outTris, mesh, model, camera, w, h, opts)
+    opts = opts or {}
+    opts.allowPartialNear = true
     appendMeshTriangles(outTris, mesh, model, camera, w, h, 0, opts)
 end
 
 function Renderer.collectMeshListTriangles(outTris, meshes, model, camera, w, h, opts)
+    opts = opts or {}
+    opts.allowPartialNear = true
+
     local vertexOffset = 0
     for _, mesh in ipairs(meshes) do
         vertexOffset = appendMeshTriangles(outTris, mesh, model, camera, w, h, vertexOffset, opts)
