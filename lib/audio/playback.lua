@@ -5,7 +5,7 @@ local function resolvePath(name)
     if not name:match("%.%w+$") then
         name = name .. ".wav"
     end
-    return RAIN.mod.path .. "/assets/" .. name
+    return RAIN.mod.path .. "/assets/sounds/" .. name
 end
 
 local function readFileData(absPath, displayName)

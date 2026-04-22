@@ -1,0 +1,16 @@
+[manifest]
+version = "1.0.0"
+dump_lua = false
+priority = 0
+
+[[patches]]
+[patches.pattern]
+target = "functions/misc_functions.lua"
+pattern = "G.PITCH_MOD = (G.PITCH_MOD or 1)*(1 - dt) + dt*((not G.normal_music_speed and G.STATE == G.STATES.GAME_OVER) and 0.5 or 1)"
+position = "after"
+payload = '''
+if RAIN.distorted[desired_track] ~= nil then
+    desired_track = 'rain_' .. desired_track .. '_distorted'
+end
+'''
+match_indent = true

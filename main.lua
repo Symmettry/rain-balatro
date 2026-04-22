@@ -4,6 +4,7 @@ RAIN = rawget(_G, "RAIN") or {}
 _G.RAIN = RAIN
 
 assert(SMODS.load_file("lib/mainmenu/rain.lua"))()
+assert(SMODS.load_file("lib/audio/sounds.lua"))()
 
 RAIN.mod = SMODS.current_mod
 RAIN.rain_active = false
@@ -22,7 +23,7 @@ local orig_wheelmoved = love.wheelmoved
 local orig_textinput = love.textinput
 
 function RAIN.ensure_scene()
-    if not scene3d then
+    if not scene3d and RAIN.rain_active then
         scene3d = Scene3D.new()
     end
     return scene3d
@@ -49,6 +50,7 @@ function RAIN.on_load()
     RAIN.sync_overlay_state()
     RAIN.load_rain_shader()
 end
+RAIN.on_load()
 
 love.update = function(dt)
     RAIN.sync_overlay_state()
@@ -57,6 +59,8 @@ love.update = function(dt)
         RAIN.ensure_scene():update(dt)
         return
     end
+
+    RAIN.update_rain_audio()
 
     if orig_update then
         return orig_update(dt)
@@ -69,11 +73,13 @@ love.draw = function(...)
         return
     end
 
+    if orig_draw then
+        local draw = orig_draw(...)
+    end
+
     RAIN.draw_rain_overlay()
 
-    if orig_draw then
-        return orig_draw(...)
-    end
+    return draw
 end
 
 love.resize = function(w, h)
