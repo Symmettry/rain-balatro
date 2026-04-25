@@ -1,3 +1,8 @@
+-- Balatro-specific sound integration
+-- Only loaded when running as Balatro mod
+
+if not SMODS then return end
+
 SMODS.Sound {
     key = "music1_distorted",
     path = "music1_distorted.ogg",

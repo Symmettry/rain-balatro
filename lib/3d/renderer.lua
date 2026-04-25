@@ -1,4 +1,6 @@
-local Math3D = assert(SMODS.load_file("lib/3d/math3d.lua"))()
+local Compat = SMODS and SMODS.load_file("lib/compat.lua", "rain")() or require("lib.compat")
+
+local Math3D = Compat.load_module("lib/3d/math3d.lua")
 local Vec3 = Math3D.Vec3
 
 local Renderer = {
@@ -8,6 +10,14 @@ local Renderer = {
     renderScale = 0.3,
     minRenderW = 256,
     minRenderH = 144,
+
+    -- Debug stats
+    stats = {
+        trianglesSubmitted = 0,
+        trianglesDrawn = 0,
+        trianglesClipped = 0,
+        trianglesCulled = 0,
+    }
 }
 
 local viewBufX, viewBufY, viewBufZ = {}, {}, {}
@@ -75,8 +85,12 @@ local function worldToView(v, model, camera, outX, outY, outZ, i)
     outZ[i] = relY * sp + z1 * cp
 end
 
+local NEAR_EPSILON = 1e-6
+local PROJECT_EPSILON = 1e-8  -- Much smaller - just to avoid div by zero
+
 local function project(x, y, z, camera, w, h)
-    if z <= camera.near then
+    -- Don't use NEAR_EPSILON here - clipping handles that. Just avoid div by zero.
+    if z <= PROJECT_EPSILON then
         return nil, nil
     end
 
@@ -108,12 +122,32 @@ local function edge(ax, ay, bx, by, px, py)
     return (px - ax) * (by - ay) - (py - ay) * (bx - ax)
 end
 
+local MAX_SCREEN_EXTENT = 100000  -- Clamp triangles with extreme coordinates (was 10000, too aggressive for FOV edges)
+
+local function clampToScreen(val, max)
+    if val ~= val then return 0 end -- NaN check
+    if val < -MAX_SCREEN_EXTENT then return -max end
+    if val > MAX_SCREEN_EXTENT then return max * 2 end -- Allow slightly past edge
+    return val
+end
+
 local function rasterTriangle(tri, rw, rh)
     local x1, y1 = tri.v[1], tri.v[2]
     local x2, y2 = tri.v[3], tri.v[4]
     local x3, y3 = tri.v[5], tri.v[6]
 
     local z1, z2, z3 = tri.d[1], tri.d[2], tri.d[3]
+
+    -- Reject if any coordinate is NaN (Inf will get clamped)
+    if x1 ~= x1 or x2 ~= x2 or x3 ~= x3 or y1 ~= y1 or y2 ~= y2 or y3 ~= y3 then return end
+    
+    -- Clamp extreme coordinates instead of rejecting - fixes FOV edge clipping
+    x1 = clampToScreen(x1, rw)
+    x2 = clampToScreen(x2, rw)
+    x3 = clampToScreen(x3, rw)
+    y1 = clampToScreen(y1, rh)
+    y2 = clampToScreen(y2, rh)
+    y3 = clampToScreen(y3, rh)
 
     local minX = math.floor(math.min(x1, x2, x3))
     local maxX = math.ceil(math.max(x1, x2, x3))
@@ -176,19 +210,19 @@ local function clipPolygonAgainstNear(poly, nearZ)
     local out = {}
 
     local function inside(v)
-        return v.z >= nearZ
+        return v.z > nearZ + NEAR_EPSILON
     end
 
     local function intersect(a, b)
         local dz = b.z - a.z
         if math.abs(dz) < 1e-8 then
-            return { x = a.x, y = a.y, z = nearZ }
+            return { x = a.x, y = a.y, z = nearZ + NEAR_EPSILON }
         end
-        local t = (nearZ - a.z) / dz
+        local t = (nearZ + NEAR_EPSILON - a.z) / dz
         return {
             x = a.x + (b.x - a.x) * t,
             y = a.y + (b.y - a.y) * t,
-            z = nearZ
+            z = nearZ + NEAR_EPSILON
         }
     end
 
@@ -235,7 +269,15 @@ local function emitClippedTriangleFan(outTris, poly, color, camera, rw, rh)
         local sx2, sy2 = project(b.x, b.y, b.z, camera, rw, rh)
         local sx3, sy3 = project(c.x, c.y, c.z, camera, rw, rh)
 
+        -- Clamp extreme coordinates to prevent numerical issues at FOV edges
         if sx1 and sx2 and sx3 then
+            sx1 = clampToScreen(sx1, rw)
+            sx2 = clampToScreen(sx2, rw)
+            sx3 = clampToScreen(sx3, rw)
+            sy1 = clampToScreen(sy1, rh)
+            sy2 = clampToScreen(sy2, rh)
+            sy3 = clampToScreen(sy3, rh)
+
             local nx, ny, nz = triNormal(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
 
             local brightness = math.abs(
@@ -297,7 +339,15 @@ function Renderer.collectClippedQuad(outTris, mesh, model, camera, rw, rh)
         local sx2, sy2 = project(b.x, b.y, b.z, camera, rw, rh)
         local sx3, sy3 = project(c.x, c.y, c.z, camera, rw, rh)
 
+        -- Clamp extreme coordinates to prevent numerical issues at FOV edges
         if sx1 and sx2 and sx3 then
+            sx1 = clampToScreen(sx1, rw)
+            sx2 = clampToScreen(sx2, rw)
+            sx3 = clampToScreen(sx3, rw)
+            sy1 = clampToScreen(sy1, rh)
+            sy2 = clampToScreen(sy2, rh)
+            sy3 = clampToScreen(sy3, rh)
+
             local nx, ny, nz = triNormal(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
 
             local brightness = math.abs(
@@ -364,7 +414,11 @@ local function appendMeshTriangles(outTris, mesh, model, camera, rw, rh, vertexO
         local bx, by, bz = viewBufX[ib], viewBufY[ib], viewBufZ[ib]
         local cx, cy, cz = viewBufX[ic], viewBufY[ic], viewBufZ[ic]
 
-        local allBehind = (az <= camera.near and bz <= camera.near and cz <= camera.near)
+        Renderer.stats.trianglesSubmitted = Renderer.stats.trianglesSubmitted + 1
+
+        -- Near plane tests: 'allBehind' uses epsilon to catch borderline cases
+        -- 'allInFront' uses strict near plane so triangles grazing the plane get clipped properly
+        local allBehind = (az <= camera.near + NEAR_EPSILON and bz <= camera.near + NEAR_EPSILON and cz <= camera.near + NEAR_EPSILON)
         local allInFront = (az > camera.near and bz > camera.near and cz > camera.near)
 
         if allInFront then
@@ -372,7 +426,15 @@ local function appendMeshTriangles(outTris, mesh, model, camera, rw, rh, vertexO
             local sx2, sy2 = project(bx, by, bz, camera, rw, rh)
             local sx3, sy3 = project(cx, cy, cz, camera, rw, rh)
 
+            -- Clamp extreme coordinates to prevent numerical issues at FOV edges
             if sx1 and sx2 and sx3 then
+                sx1 = clampToScreen(sx1, rw)
+                sx2 = clampToScreen(sx2, rw)
+                sx3 = clampToScreen(sx3, rw)
+                sy1 = clampToScreen(sy1, rh)
+                sy2 = clampToScreen(sy2, rh)
+                sy3 = clampToScreen(sy3, rh)
+
                 local nx, ny, nz = triNormal(ax, ay, az, bx, by, bz, cx, cy, cz)
 
                 local brightness = math.abs(
@@ -390,11 +452,15 @@ local function appendMeshTriangles(outTris, mesh, model, camera, rw, rh, vertexO
                     b = brightness,
                     c = defaultColor
                 }
+                Renderer.stats.trianglesDrawn = Renderer.stats.trianglesDrawn + 1
             end
 
         elseif not allBehind and (opts.alwaysRender or opts.allowPartialNear) then
+            Renderer.stats.trianglesClipped = Renderer.stats.trianglesClipped + 1
             local clipped = clipTriangleAgainstNear(ax, ay, az, bx, by, bz, cx, cy, cz, camera.near)
             emitClippedTriangleFan(outTris, clipped, defaultColor, camera, rw, rh)
+        else
+            Renderer.stats.trianglesCulled = Renderer.stats.trianglesCulled + 1
         end
     end
 
@@ -418,6 +484,12 @@ function Renderer.collectMeshListTriangles(outTris, meshes, model, camera, w, h,
 end
 
 function Renderer.beginFrame(viewW, viewH, clearColor)
+    -- Reset stats
+    Renderer.stats.trianglesSubmitted = 0
+    Renderer.stats.trianglesDrawn = 0
+    Renderer.stats.trianglesClipped = 0
+    Renderer.stats.trianglesCulled = 0
+
     local rw = math.max(Renderer.minRenderW, math.floor(viewW * Renderer.renderScale + 0.5))
     local rh = math.max(Renderer.minRenderH, math.floor(viewH * Renderer.renderScale + 0.5))
 
@@ -452,6 +524,14 @@ function Renderer.endFrame(dstX, dstY, dstW, dstH)
         dstW / canvasImage:getWidth(),
         dstH / canvasImage:getHeight()
     )
+end
+
+function Renderer.drawStats(x, y)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    local font = love.graphics.getFont()
+    local s = Renderer.stats
+    love.graphics.print(string.format("Tris: %d sub / %d drwn / %d clip / %d culled", 
+        s.trianglesSubmitted, s.trianglesDrawn, s.trianglesClipped, s.trianglesCulled), x, y)
 end
 
 function Renderer.drawMesh(mesh, model, camera, w, h)

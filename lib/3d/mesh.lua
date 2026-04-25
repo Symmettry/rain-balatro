@@ -1,4 +1,7 @@
-local Vec3 = assert(SMODS.load_file("lib/3d/math3d.lua"))().Vec3
+local Compat = SMODS and SMODS.load_file("lib/compat.lua", "rain")() or require("lib.compat")
+
+local Math3D = Compat.load_module("lib/3d/math3d.lua")
+local Vec3 = Math3D.Vec3
 
 local Mesh = {}
 

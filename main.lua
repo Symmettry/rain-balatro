@@ -1,266 +1,335 @@
-local Scene3D = assert(SMODS.load_file("lib/3d/scene.lua"))()
+-- Rain - Hybrid Balatro Mod + Standalone LÖVE2D Experience
+-- Auto-detects environment and runs appropriate mode
 
 RAIN = rawget(_G, "RAIN") or {}
 _G.RAIN = RAIN
 
-assert(SMODS.load_file("lib/rain/rain.lua"))()
-assert(SMODS.load_file("lib/audio/sounds.lua"))()
-assert(SMODS.load_file("lib/phase.lua"))()
+-- Load compatibility layer first
+local Compat = SMODS and SMODS.load_file("lib/compat.lua", "rain")() or require("lib.compat")
 
-RAIN.mod = SMODS.current_mod
-RAIN.rain_active = false
-RAIN.fake_crash = false
-RAIN.fake_crash_started = nil
-RAIN.fake_crash_message = [[Unable to witness the renderer]]
 
+-- Load shared rain system
+local RainSystem = Compat.load_module("lib/rain/rain.lua")
+
+-- Load 3D scene
+local Scene3D = Compat.load_module("lib/3d/scene.lua")
+
+-- Module references
+local AudioSystem = Compat.load_module("lib/audio/playback.lua")
+
+-- Runtime state
 local scene3d = nil
 local overlay_was_active = false
+local standalone_initialized = false
 
-local orig_update = love.update
-local orig_draw = love.draw
-local orig_resize = love.resize
-local orig_mousemoved = love.mousemoved
-local orig_keypressed = love.keypressed
-local orig_mousepressed = love.mousepressed
-local orig_mousereleased = love.mousereleased
-local orig_wheelmoved = love.wheelmoved
-local orig_textinput = love.textinput
+-- Original LÖVE callbacks (for Balatro hooking)
+local orig_callbacks = {}
 
-function RAIN.ensure_scene()
-    if not scene3d and RAIN.rain_active then
-        scene3d = Scene3D.new()
-    end
-    return scene3d
-end
+-- ============================================================================
+-- MODE: BALATRO MOD
+-- ============================================================================
 
-function RAIN.overlay_active()
-    return RAIN and RAIN.rain_active == true
-end
+local function init_balatro_mode()
+    Compat.log("Initializing Balatro mode")
 
-function RAIN.sync_overlay_state()
-    local active = RAIN.overlay_active()
+    RAIN.mod = SMODS.current_mod
+    RAIN.rain_active = false
+    RAIN.fake_crash = false
+    RAIN.fake_crash_started = nil
 
-    if active and not overlay_was_active then
-        RAIN.ensure_scene():onActivate()
-        overlay_was_active = true
-    elseif (not active) and overlay_was_active then
-        if scene3d then scene3d:onDeactivate() end
-        overlay_was_active = false
-    end
-end
+    -- Load Balatro-specific integrations
+    Compat.load_module("lib/audio/sounds.lua")
+    Compat.load_module("lib/phase.lua")
 
-function RAIN.on_load()
-    RAIN.ensure_scene()
-    RAIN.sync_overlay_state()
-    RAIN.load_rain_shader()
-end
-RAIN.on_load()
+    -- Hook into LÖVE callbacks
+    orig_callbacks.update = love.update
+    orig_callbacks.draw = love.draw
+    orig_callbacks.resize = love.resize
+    orig_callbacks.mousemoved = love.mousemoved
+    orig_callbacks.keypressed = love.keypressed
+    orig_callbacks.mousepressed = love.mousepressed
+    orig_callbacks.mousereleased = love.mousereleased
+    orig_callbacks.wheelmoved = love.wheelmoved
+    orig_callbacks.textinput = love.textinput
 
-love.update = function(dt)
-    if RAIN.fake_crash then
-        if not RAIN.fake_crash_started then
-            RAIN.fake_crash_started = love.timer.getTime()
-            love.audio.stop()
+    function RAIN.ensure_scene()
+        if not scene3d and RAIN.rain_active then
+            scene3d = Scene3D.new()
         end
+        return scene3d
+    end
 
-        if love.timer.getTime() - RAIN.fake_crash_started >= 3 then
-            G.GAME = nil
-            RAIN.fake_crash = false
-            RAIN.rain_active = true
+    function RAIN.overlay_active()
+        return RAIN.rain_active == true
+    end
+
+    function RAIN.sync_overlay_state()
+        local active = RAIN.overlay_active()
+        if active and not overlay_was_active then
+            RAIN.ensure_scene():onActivate()
+            overlay_was_active = true
+            love.mouse.setRelativeMode(true)
+        elseif (not active) and overlay_was_active then
+            if scene3d then scene3d:onDeactivate() end
+            overlay_was_active = false
+            love.mouse.setRelativeMode(false)
+        end
+    end
+
+    -- Override LÖVE callbacks
+    love.update = function(dt)
+        if RAIN.fake_crash then
+            if not RAIN.fake_crash_started then
+                RAIN.fake_crash_started = love.timer.getTime()
+                love.audio.stop()
+            end
+            if love.timer.getTime() - RAIN.fake_crash_started >= 3 then
+                G.GAME = nil
+                RAIN.fake_crash = false
+                RAIN.rain_active = true
+                return
+            end
             return
         end
 
-        return
+        RAIN.sync_overlay_state()
+
+        if RAIN.overlay_active() then
+            RAIN.ensure_scene():update(dt)
+            return
+        end
+
+        RainSystem.update_audio()
+
+        -- Call phase logic
+        if RAIN.try_next_phase then
+            RAIN.try_next_phase()
+        end
+
+        if orig_callbacks.update then
+            return orig_callbacks.update(dt)
+        end
     end
 
+    love.draw = function(...)
+        if RAIN.fake_crash then
+            RainSystem.draw_fake_crash()
+            return
+        end
+
+        if RAIN.overlay_active() then
+            RAIN.ensure_scene():draw()
+            return
+        end
+
+        local result
+        if orig_callbacks.draw then
+            result = orig_callbacks.draw(...)
+        end
+
+        RainSystem.draw_overlay()
+        return result
+    end
+
+    love.resize = function(w, h)
+        if scene3d then
+            scene3d:updateViewport()
+        end
+        if RAIN.overlay_active() then
+            return
+        end
+        if orig_callbacks.resize then
+            return orig_callbacks.resize(w, h)
+        end
+    end
+
+    love.mousemoved = function(x, y, dx, dy, istouch)
+        if RAIN.overlay_active() then
+            RAIN.ensure_scene():mousemoved(x, y, dx, dy, istouch)
+            return
+        end
+        if orig_callbacks.mousemoved then
+            return orig_callbacks.mousemoved(x, y, dx, dy, istouch)
+        end
+    end
+
+    love.keypressed = function(key, scancode, isrepeat)
+        if RAIN.overlay_active() then
+            RAIN.ensure_scene():keypressed(key, scancode, isrepeat)
+            return
+        end
+        if orig_callbacks.keypressed then
+            return orig_callbacks.keypressed(key, scancode, isrepeat)
+        end
+    end
+
+    love.mousepressed = function(...)
+        if RAIN.overlay_active() then return end
+        if orig_callbacks.mousepressed then
+            return orig_callbacks.mousepressed(...)
+        end
+    end
+
+    love.mousereleased = function(...)
+        if RAIN.overlay_active() then return end
+        if orig_callbacks.mousereleased then
+            return orig_callbacks.mousereleased(...)
+        end
+    end
+
+    love.wheelmoved = function(x, y)
+        if RAIN.fake_crash then
+            RAIN.fake_crash_scroll = RAIN.fake_crash_scroll - y * 20
+            if RAIN.fake_crash_scroll < 0 then RAIN.fake_crash_scroll = 0 end
+            return
+        end
+        if RAIN.overlay_active() then return end
+        if orig_callbacks.wheelmoved then
+            return orig_callbacks.wheelmoved(x, y)
+        end
+    end
+
+    love.textinput = function(...)
+        if RAIN.overlay_active() then return end
+        if orig_callbacks.textinput then
+            return orig_callbacks.textinput(...)
+        end
+    end
+
+    -- Initial setup
+    RAIN.load_rain_shader = RainSystem.load_shader
+    RAIN.draw_rain_overlay = RainSystem.draw_overlay
+    RAIN.update_rain_audio = RainSystem.update_audio
+    RAIN.get_rain_profile = RainSystem.get_profile
+    RAIN.get_current_ante = RainSystem.get_current_ante
+    RAIN.should_play_rain = RainSystem.should_play
+    RAIN.draw_fake_crash = RainSystem.draw_fake_crash
+    RAIN.get_fake_crash_text = RainSystem.get_fake_crash_text
+
+    -- Load shader and initialize
+    RainSystem.load_shader()
+    RAIN.ensure_scene()
     RAIN.sync_overlay_state()
 
-    if RAIN.overlay_active() then
-        RAIN.ensure_scene():update(dt)
-        return
-    end
-
-    RAIN.update_rain_audio()
-    RAIN.try_next_phase()
-
-    if orig_update then
-        return orig_update(dt)
-    end
+    Compat.log("Balatro mode initialized")
 end
 
-love.draw = function(...)
-    if RAIN.fake_crash then
-        RAIN.draw_fake_crash()
-        return
+-- ============================================================================
+-- MODE: STANDALONE
+-- ============================================================================
+
+local function init_standalone_mode()
+    Compat.log("Initializing Standalone mode")
+
+    standalone_initialized = true
+    RAIN.active_profile = RainSystem.PROFILES.moderate
+
+    -- Scene instance
+    scene3d = Scene3D.new()
+
+    -- Override LÖVE callbacks for standalone
+    love.load = function()
+        love.window.setTitle("Rain - A Peaceful Forest Walk")
+        if not love.window.getMode() then
+            love.window.setMode(1280, 720, { resizable = true, vsync = true })
+        end
+        love.mouse.setRelativeMode(true)
+
+        RainSystem.load_shader()
+
+        AudioSystem.playCrossfadeLoop("rain_soft", {
+            mode = "static",
+            volume = profile.volume,
+            overlap = 1.0
+        })
+
+        Compat.log("Controls: WASD=Move, Mouse=Look, 1-4=Rain intensity, F=Wireframe, M=Mute, ESC=Quit")
     end
 
-    if RAIN.overlay_active() then
-        RAIN.ensure_scene():draw()
-        return
+    love.update = function(dt)
+        RainSystem.rain_time = RainSystem.rain_time + dt
+
+        -- Update rain audio based on current profile
+        if RAIN.active_profile then
+            AudioSystem.playCrossfadeLoop("rain_soft", {
+                mode = "static",
+                volume = profile.volume,
+                overlap = 1.0
+            })
+        end
+
+        if scene3d then
+            scene3d:update(dt)
+        end
     end
 
-    local draw
-    if orig_draw then
-        draw = orig_draw(...)
+    love.draw = function()
+        if not scene3d then return end
+
+        -- Draw 3D scene
+        scene3d:draw()
+
+        -- Draw rain overlay
+        if RainSystem.rain_shader and RAIN.active_profile then
+            love.graphics.setShader(RainSystem.rain_shader)
+            RainSystem.rain_shader:send("iTime", RainSystem.rain_time)
+            RainSystem.rain_shader:send("iResolution", { love.graphics.getWidth(), love.graphics.getHeight() })
+            RainSystem.rain_shader:send("rainSpeed", RAIN.active_profile.speed)
+            RainSystem.rain_shader:send("rainDensity", RAIN.active_profile.density)
+            RainSystem.rain_shader:send("rainBrightness", RAIN.active_profile.brightness)
+            RainSystem.rain_shader:send("rainAlpha", RAIN.active_profile.alpha)
+
+            love.graphics.setColor(1, 1, 1, RAIN.active_profile.alpha)
+            love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
+            love.graphics.setShader()
+            love.graphics.setColor(1, 1, 1, 1)
+        end
+
+        -- Draw UI
+        love.graphics.setColor(1, 1, 1, 0.7)
+        local font = love.graphics.getFont()
+        local y = 10
+        love.graphics.print("Rain - 1-4: intensity, F: wireframe, M: mute, ESC: quit", 10, y)
+        local profile_name = RAIN.active_profile == RainSystem.PROFILES.gentle and "Gentle" or
+                            RAIN.active_profile == RainSystem.PROFILES.moderate and "Moderate" or
+                            RAIN.active_profile == RainSystem.PROFILES.heavy and "Heavy" or "Storm"
+        love.graphics.print("Intensity: " .. profile_name, 10, y + 20)
     end
 
-    RAIN.draw_rain_overlay()
+    love.resize = function(w, h)
+        if scene3d then
+            scene3d:updateViewport()
+        end
+    end
 
-    return draw
+    love.mousemoved = function(x, y, dx, dy, istouch)
+        if scene3d then
+            scene3d:mousemoved(x, y, dx, dy, istouch)
+        end
+    end
+
+    love.keypressed = function(key, scancode, isrepeat)
+        if scene3d then
+            scene3d:keypressed(key, scancode, isrepeat)
+        end
+    end
+
+    love.quit = function()
+        AudioSystem.stopAll()
+    end
+
+    -- Trigger load immediately since we might be past initial load
+    if love.load then love.load() end
+
+    Compat.log("Standalone mode initialized")
 end
 
-love.resize = function(w, h)
-    if scene3d then
-        scene3d:updateViewport()
-    end
+-- ============================================================================
+-- ENTRY POINT
+-- ============================================================================
 
-    if RAIN.overlay_active() then
-        return
-    end
-
-    if orig_resize then
-        return orig_resize(w, h)
-    end
-end
-
-love.mousemoved = function(x, y, dx, dy, istouch)
-    if RAIN.overlay_active() then
-        RAIN.ensure_scene():mousemoved(x, y, dx, dy, istouch)
-        return
-    end
-
-    if orig_mousemoved then
-        return orig_mousemoved(x, y, dx, dy, istouch)
-    end
-end
-
-love.keypressed = function(key, scancode, isrepeat)
-    if RAIN.overlay_active() then
-        RAIN.ensure_scene():keypressed(key, scancode, isrepeat)
-        return
-    end
-
-    if orig_keypressed then
-        return orig_keypressed(key, scancode, isrepeat)
-    end
-end
-
-love.mousepressed = function(...)
-    if RAIN.overlay_active() then return end
-    if orig_mousepressed then return orig_mousepressed(...) end
-end
-
-love.mousereleased = function(...)
-    if RAIN.overlay_active() then return end
-    if orig_mousereleased then return orig_mousereleased(...) end
-end
-
-love.wheelmoved = function(...)
-    if RAIN.overlay_active() then return end
-    if orig_wheelmoved then return orig_wheelmoved(...) end
-end
-
-love.textinput = function(...)
-    if RAIN.overlay_active() then return end
-    if orig_textinput then return orig_textinput(...) end
-end
-
-RAIN.fake_crash_scroll = RAIN.fake_crash_scroll or 0
-RAIN.fake_crash_end_height = RAIN.fake_crash_end_height or 0
-
-function RAIN.get_fake_crash_text()
-    local msg = tostring(RAIN.fake_crash_message or "Unknown error")
-
-    local p = table.concat({
-        "Oops! The game crashed:",
-        "",
-        msg,
-        "",
-        "Additional Context:",
-        "Balatro Version: " .. tostring(VERSION or "???"),
-        "Modded Version: " .. tostring(MODDED_VERSION or "???"),
-        "Platform: " .. tostring(love.system and love.system.getOS() or "???"),
-        "",
-        "Press ESC to exit",
-        "Restarting..."
-    }, "\n")
-
-    p = p:gsub("\t", "")
-    p = p:gsub("%[string \"(.-)\"%]", "%1")
-
-    return p
-end
-
-function RAIN.draw_fake_crash()
-    if love.graphics.isActive and not love.graphics.isActive() then return end
-
-    local background = {0, 0, 0, 1}
-    if G and G.C and G.C.BLACK then
-        background = G.C.BLACK
-    end
-
-    love.graphics.clear(background)
-    love.graphics.origin()
-    love.graphics.setColor(1, 1, 1, 1)
-
-    if not RAIN.fake_crash_font then
-        local ok, font = pcall(love.graphics.newFont, "resources/fonts/m6x11plus.ttf", 20)
-        RAIN.fake_crash_font = ok and font or love.graphics.getFont()
-    end
-    love.graphics.setFont(RAIN.fake_crash_font)
-
-    local p = RAIN.get_fake_crash_text()
-    local pos = 70
-    local arrowSize = 20
-    local w, h = love.graphics.getDimensions()
-
-    local font = love.graphics.getFont()
-    local _, lines = font:getWrap(p, w - pos * 2)
-    local lineHeight = font:getHeight()
-
-    RAIN.fake_crash_end_height = #lines * lineHeight - h + pos * 2
-    if RAIN.fake_crash_end_height < 0 then
-        RAIN.fake_crash_end_height = 0
-    end
-
-    if RAIN.fake_crash_scroll > RAIN.fake_crash_end_height then
-        RAIN.fake_crash_scroll = RAIN.fake_crash_end_height
-    end
-
-    love.graphics.printf(
-        p,
-        pos,
-        pos - RAIN.fake_crash_scroll,
-        w - pos * 2
-    )
-
-    if RAIN.fake_crash_scroll ~= RAIN.fake_crash_end_height then
-        love.graphics.polygon(
-            "fill",
-            w - (pos / 2), h - arrowSize,
-            w - (pos / 2) + arrowSize, h - (arrowSize * 2),
-            w - (pos / 2) - arrowSize, h - (arrowSize * 2)
-        )
-    end
-
-    if RAIN.fake_crash_scroll ~= 0 then
-        love.graphics.polygon(
-            "fill",
-            w - (pos / 2), arrowSize,
-            w - (pos / 2) + arrowSize, arrowSize * 2,
-            w - (pos / 2) - arrowSize, arrowSize * 2
-        )
-    end
-end
-
-local orig_wheelmoved = love.wheelmoved
-love.wheelmoved = function(x, y)
-    if RAIN.fake_crash then
-        RAIN.fake_crash_scroll = RAIN.fake_crash_scroll - y * 20
-        if RAIN.fake_crash_scroll < 0 then RAIN.fake_crash_scroll = 0 end
-        return
-    end
-
-    if RAIN.overlay_active() then return end
-    if orig_wheelmoved then return orig_wheelmoved(x, y) end
+if Compat.is_balatro() then
+    init_balatro_mode()
+else
+    init_standalone_mode()
 end
